@@ -1,31 +1,34 @@
-use role accountadmin;
-use schema quickstart_prod.gold;
-
+USE ROLE accountadmin;
+USE SCHEMA quickstart_prod.gold;
 
 -- declarative target table of pipeline
-create or alter table vacation_spots (
-    city varchar
-  , airport varchar
-  , co2_emissions_kg_per_person float
-  , punctual_pct float
-  , avg_temperature_air_f float
-  , avg_relative_humidity_pct float
-  , avg_cloud_cover_pct float
-  , precipitation_probability_pct float
+CREATE OR ALTER TABLE vacation_spots (
+    city VARCHAR
+  , airport VARCHAR
+  , co2_emissions_kg_per_person FLOAT
+  , punctual_pct FLOAT
+  , avg_temperature_air_f FLOAT
+  , avg_relative_humidity_pct FLOAT
+  , avg_cloud_cover_pct FLOAT
+  , precipitation_probability_pct FLOAT
   -- STEP 5: INSERT CHANGES HERE
+  , aquarium_cnt INT
+  , zoo_cnt INT
+  , korean_restaurant_cnt INT
 ) data_retention_time_in_days = 1;
 
-
 -- task to merge pipeline results into target table
-create or alter task vacation_spots_update
-  schedule = '1440 minute'
-  warehouse = 'quickstart_wh'
+CREATE OR ALTER TASK vacation_spots_update
+  SCHEDULE = '1440 minute'
+  WAREHOUSE = 'quickstart_wh'
   AS MERGE INTO vacation_spots USING (
-    select *
-    from silver.flights_from_home flight
-    join silver.weather_joined_with_major_cities city on city.geo_name = flight.arrival_city
+    SELECT *
+    FROM silver.flights_from_home flight
+    JOIN silver.weather_joined_with_major_cities city ON city.geo_name = flight.arrival_city
     -- STEP 5: INSERT CHANGES HERE
-  ) as harmonized_vacation_spots ON vacation_spots.city = harmonized_vacation_spots.arrival_city and vacation_spots.airport = harmonized_vacation_spots.arrival_airport
+    JOIN silver.attractions att ON att.geo_name = city.geo_name
+  ) AS harmonized_vacation_spots ON vacation_spots.city = harmonized_vacation_spots.arrival_city 
+    AND vacation_spots.airport = harmonized_vacation_spots.arrival_airport
   WHEN MATCHED THEN
     UPDATE SET
         vacation_spots.co2_emissions_kg_per_person = harmonized_vacation_spots.co2_emissions_kg_per_person
@@ -35,6 +38,9 @@ create or alter task vacation_spots_update
       , vacation_spots.avg_cloud_cover_pct = harmonized_vacation_spots.avg_cloud_cover_pct
       , vacation_spots.precipitation_probability_pct = harmonized_vacation_spots.precipitation_probability_pct
       -- STEP 5: INSERT CHANGES HERE
+      , vacation_spots.aquarium_cnt = harmonized_vacation_spots.aquarium_cnt
+      , vacation_spots.zoo_cnt = harmonized_vacation_spots.zoo_cnt
+      , vacation_spots.korean_restaurant_cnt = harmonized_vacation_spots.korean_restaurant_cnt
   WHEN NOT MATCHED THEN 
     INSERT VALUES (
         harmonized_vacation_spots.arrival_city
@@ -46,63 +52,63 @@ create or alter task vacation_spots_update
       , harmonized_vacation_spots.avg_cloud_cover_pct
       , harmonized_vacation_spots.precipitation_probability_pct
       -- STEP 5: INSERT CHANGES HERE
+      , harmonized_vacation_spots.aquarium_cnt
+      , harmonized_vacation_spots.zoo_cnt
+      , harmonized_vacation_spots.korean_restaurant_cnt
     );
-
 
 -- task to select perfect vacation spot and send email with vacation plan
 -- NOTE: NOT ALL CORTEX ML MODELS MAY BE AVAILABLE ON ALL DEPLOYMENTS
-create or alter task email_notification
-  warehouse = 'quickstart_wh'
-  after vacation_spots_update
-  as 
-    begin
-      let options varchar := (
-        select to_varchar(array_agg(object_construct(*)))
-        from vacation_spots
-        where true
-          and punctual_pct >= 50
-          and avg_temperature_air_f >= 70
+CREATE OR ALTER TASK email_notification
+  WAREHOUSE = 'quickstart_wh'
+  AFTER vacation_spots_update
+  AS 
+    BEGIN
+      LET options VARCHAR := (
+        SELECT TO_VARCHAR(ARRAY_AGG(OBJECT_CONSTRUCT(*)))
+        FROM vacation_spots
+        WHERE TRUE
+          AND punctual_pct >= 50
+          AND avg_temperature_air_f >= 70
           -- STEP 5: INSERT CHANGES HERE
-        limit 10);
+          AND korean_restaurant_cnt > 0
+          AND (zoo_cnt > 0 OR aquarium_cnt > 0)
+        LIMIT 10);
 
-
-      if (:options = '[]') then
+      IF (:options = '[]') THEN
         CALL SYSTEM$SEND_EMAIL(
             'email_integration',
-            '<insert your email here>', -- INSERT YOUR EMAIL HERE
+            'lauro.bolado@perficient.com', -- INSERT YOUR EMAIL HERE
             'New data successfully processed: No suitable vacation spots found.',
             'The query did not return any results. Consider adjusting your filters.');
-      end if;
+      END IF;
 
-      let query varchar := 'Considering the data provided below in JSON format, pick the best city for a family vacation in summer?
+      LET query VARCHAR := 'Considering the data provided below in JSON format, pick the best city for a family vacation in summer?
       Explain your choise, offer a short description of the location and provide tips on what to pack for the vacation considering the weather conditions? 
       Finally, could you provide a detailed plan of daily activities for a one week long vacation covering the highlights of the chosen destination?\n\n';
       
-      let response varchar := (SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-7b', :query || :options));
+      LET response VARCHAR := (SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-7b', :query || :options));
 
       CALL SYSTEM$SEND_EMAIL(
         'email_integration',
-        '<insert your email here>', -- INSERT YOUR EMAIL HERE
+        'lauro.bolado@perficient.com', -- INSERT YOUR EMAIL HERE
         'New data successfully processed: The perfect place for your summer vacation has been found.',
         :response);
-    exception
-        when EXPRESSION_ERROR then
+    EXCEPTION
+        WHEN EXPRESSION_ERROR THEN
             CALL SYSTEM$SEND_EMAIL(
             'email_integration',
-            '<insert your email here>', -- INSERT YOUR EMAIL HERE
+            'lauro.bolado@perficient.com', -- INSERT YOUR EMAIL HERE
             'New data successfully processed: Cortex LLM function inaccessible.',
             'It appears that the Cortex LLM functions are not available in your region');
-    end;
-
+    END;
 
 -- resume follow-up task so it is included in DAG runs
 -- don't resume the root task so the regular schedule doesn't get invoked
-alter task email_notification resume;
-
+ALTER TASK email_notification RESUME;
 
 -- manually initiate a full execution of the DAG
-execute task vacation_spots_update;
-
+EXECUTE TASK vacation_spots_update;
 
 /*
 -- SQL commands to monitor the progress of tasks
