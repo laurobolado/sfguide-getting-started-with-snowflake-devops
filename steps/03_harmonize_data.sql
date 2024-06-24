@@ -1,6 +1,6 @@
 -- Views to transform marketplace data in pipeline
 USE ROLE accountadmin;
-USE SCHEMA quickstart_prod.silver;
+USE SCHEMA quickstart_{{environment}}.silver;
 
 /*
 To join the flight and location focused tables 

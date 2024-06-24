@@ -52,8 +52,8 @@ Commit your changes to the "dev" branch before continuing
 ---------------------------------------------------------
 */
 
-use role accountadmin;
+USE ROLE accountadmin;
 -- Fetch changes from GitHub
-alter git repository quickstart_common.public.quickstart_repo fetch;
+ALTER GIT REPOSITORY quickstart_common.public.quickstart_repo FETCH;
 -- Deploy the updated data pipeline
-execute immediate from @quickstart_common.public.quickstart_repo/branches/dev/deploy_pipeline.sql;
+EXECUTE IMMEDIATE FROM @quickstart_common.public.quickstart_repo/branches/dev/deploy_pipeline.sql;
